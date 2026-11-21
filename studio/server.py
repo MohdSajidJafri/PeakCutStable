@@ -2,6 +2,8 @@
 
 Public pages:  /  /login  /signup          The app:  /app  (signed-in users only)
 Everything under /api, /media and /oauth needs a session, except /api/auth/* and /api/public."""
+import asyncio
+from contextlib import asynccontextmanager
 import hashlib
 import hmac
 import json
@@ -34,29 +36,10 @@ def _quiet(fn):
         print(f"  {e}", flush=True)
 
 
-app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None)
-WEB = config.ROOT / "web"
-OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
-PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
-         "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html"}
-VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-       "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
-       "frame-src https://player.twitch.tv https://www.youtube-nocookie.com https://player.kick.com; "
-       "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
-
-
-BOOT = f"{int(time.time()) % 100000:x}"     # part of every sync token, so pages reload their data after a restart
-
-
-@app.on_event("startup")
-async def _more_threads():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = int(config.env("PEAKCUT_REQUEST_THREADS", "64"))
-
-
-@app.on_event("startup")
-def _startup():
     db.init()
     for f in (config.TMP_DIR / "uploads").glob("*"):      # uploads cut short by a restart
         try:
@@ -74,6 +57,25 @@ def _startup():
     posting.start()
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
+    try:
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+
+
+app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+WEB = config.ROOT / "web"
+OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
+PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
+         "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html"}
+VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
+       "frame-src https://player.twitch.tv https://www.youtube-nocookie.com https://player.kick.com; "
+       "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
+
+
+BOOT = f"{int(time.time()) % 100000:x}"     # part of every sync token, so pages reload their data after a restart
 
 
 # ================================================================ the gate: who is asking, and are they allowed
@@ -219,9 +221,15 @@ class Compress:
         self.plain, self.gzip = app, GZipMiddleware(app, minimum_size=800, compresslevel=6)
 
     async def __call__(self, scope, receive, send):
-        path = scope.get("path", "") if scope["type"] == "http" else ""
-        media = path.startswith(("/media/", "/api/upload")) or path.endswith((".mp4", ".jpg", ".png", ".webp", ".ico"))
-        await (self.plain if scope["type"] != "http" or media else self.gzip)(scope, receive, send)
+        if scope["type"] != "http":
+            await self.plain(scope, receive, send)
+            return
+        try:
+            path = scope.get("path", "")
+            media = path.startswith(("/media/", "/api/upload")) or path.endswith((".mp4", ".jpg", ".png", ".webp", ".ico"))
+            await (self.plain if media else self.gzip)(scope, receive, send)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
 
 
 app.add_middleware(Compress)
@@ -1545,14 +1553,17 @@ def main():
     if not config.ACCOUNTS and (config.HTTPS or config.HOST not in ("127.0.0.1", "localhost", "::1")):
         print("  Sign-in is off, so anyone who can reach this address can use PeakCut and its AI key.\n"
               "  On a server other people can reach, set PEAKCUT_ACCOUNTS=1 in .env.\n", flush=True)
-    if config.env("PEAKCUT_AUTO_RELOAD") == "1":
-        # restart by itself whenever the server code changes (pages in web/ never need a restart)
-        uvicorn.run("studio.server:app", host=config.HOST, port=config.PORT, log_level="warning", backlog=4096, reload=True,
-                    reload_dirs=[str(config.ROOT / "studio")], reload_includes=["*.py"],
+    try:
+        if config.env("PEAKCUT_AUTO_RELOAD") == "1":
+            # restart by itself whenever the server code changes (pages in web/ never need a restart)
+            uvicorn.run("studio.server:app", host=config.HOST, port=config.PORT, log_level="warning", backlog=4096, reload=True,
+                        reload_dirs=[str(config.ROOT / "studio")], reload_includes=["*.py"],
+                        proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*")
+            return
+        uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning", backlog=4096,
                     proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*")
-        return
-    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning", backlog=4096,
-                proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*")
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
