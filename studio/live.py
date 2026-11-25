@@ -1359,6 +1359,10 @@ def _watch_one(c):
                     resolve(normalize(url))
                 except NotLive:
                     continue
+            try:
+                brain.require_ai()             # no working AI key: nothing is recorded (the pages show the warning)
+            except ValueError:
+                return
             start_session(c, url)
             where = creators.platform_key(url).title()
             creators.log(c["id"], f"Went live on {where}: recording started automatically")

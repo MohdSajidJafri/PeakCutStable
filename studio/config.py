@@ -219,7 +219,7 @@ ALLOWED_SITES = tuple(s.strip().lower() for s in env(
     "PEAKCUT_ALLOWED_SITES", "youtube.com,youtu.be,twitch.tv,kick.com").split(",") if s.strip())
 
 # ---------------------------------------------------------------- AI (bring your own key: see studio/ai.py)
-# These are the starting values. Whatever is saved from the dashboard (Settings, AI) is used instead.
+# These are the starting values. Whatever is saved from the dashboard (the AI page) is used instead.
 AI_PROVIDER = env("PEAKCUT_AI_PROVIDER", "gemini").strip().lower()            # gemini, openai, xai, groq, openrouter, anthropic, ollama, custom
 AI_MODELS = [m.strip() for m in env("PEAKCUT_AI_MODELS", "").split(",") if m.strip()]   # tried in this order
 AI_BASE_URL = env("PEAKCUT_AI_BASE_URL", "").rstrip("/")                      # only for "custom", or to override a provider's address
@@ -284,7 +284,7 @@ OUT_W, OUT_H, OUT_FPS = 1080, 1920, 30
 
 # The release people are told about: the What's new pop-up (web/index.html WN_VER is the same string), the bell
 # notice every account gets once, and the "new version" note an open page shows when it is older than this.
-RELEASE = "2026-11-25"
+RELEASE = "2026-11-26"
 RELEASE_NOTICE = env("PEAKCUT_RELEASE_NOTICE", "1") == "1"
 
 # https served by PeakCut itself, without a web server in front: both files set, and the site answers on https.
