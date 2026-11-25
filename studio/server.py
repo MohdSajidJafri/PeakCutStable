@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import campaigns, discover
-from . import account, load, updates
+from . import account, load, shortcut, updates
 from . import (accounts, ai, alerts, auth, brain, config, creators, ctx, db, jobs, live, media, posting,
                profiles, render, safe, templates, transcribe, usage)
 
@@ -103,6 +103,7 @@ def _startup():
     jobs.start()
     live.start()
     posting.start()
+    updates.note_version(used_before=any(config.USERS_DIR.glob("*/*")))
     updates.start(idle=_nothing_running)   # looks for a newer PeakCut every minute, in the background
     discover.warm_up()
 
@@ -532,6 +533,31 @@ def _nothing_running() -> bool:
         return True
 
 
+# ---------------------------------------------------------------- PeakCut as an app: an icon to open it, and closing it
+def _own_computer(request: Request):
+    _admin(request)
+    if config.ACCOUNTS or not _on_this_computer(request) or Path("/.dockerenv").exists():
+        raise HTTPException(409, "This only works on the computer PeakCut runs on.")
+
+
+@app.post("/api/app/shortcut")
+def app_shortcut(request: Request):
+    _own_computer(request)
+    try:
+        return {"made": shortcut.create(config.PORT)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, str(e)[:200] or "The icon couldn't be made.")
+
+
+@app.post("/api/app/quit")
+def app_quit(request: Request):
+    _own_computer(request)
+    if not _nothing_running():
+        raise HTTPException(409, "Something is still recording or being made. Stop it, or wait for it to finish.")
+    threading.Timer(1.0, os._exit, args=(0,)).start()
+    return {"ok": True}
+
+
 @app.post("/api/update/install")
 def update_install(request: Request):
     _admin(request)
@@ -734,7 +760,8 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
 def status(request: Request):
     from . import notices
     me_ = _me(request)
-    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "updater": updates.state() if me_.is_admin and updates.latest() else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
+    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "updater": updates.state() if me_.is_admin and (updates.latest() or updates.auto_on()) else None,
+            "updated": updates.updated() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"], "ask_rating": _ask_rating(),
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) and (accounts.app_open(p) or bool(getattr(me_, "is_admin", False))) for p in accounts.PLATFORM_NAMES}, "open": {p: accounts.can_connect(p) and accounts.app_open(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS, "speech": _speech_brief(),

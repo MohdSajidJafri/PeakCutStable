@@ -83,7 +83,15 @@ main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:
 .upd h3{font-size:13px;font-weight:600;color:var(--brand-ink);margin:0}
 .vb{display:flex;align-items:center;gap:12px;margin:12px 28px 0;padding:12px 12px 12px 16px;border-radius:12px;background:#FFF4E6;color:#7A3E0C;font-size:14px;animation:rise .3s ease both}
 .vb svg{width:18px;height:18px;flex:none;color:var(--brand-deep)}
-.vb span{flex:1;min-width:0}
+.vb span:not(.spin){flex:1;min-width:0}
+.vb.ok{background:var(--good-soft);color:#0B6B44}.vb.ok b,.vb.ok svg{color:#0B6B44}
+.updcard{position:fixed;inset:0;z-index:2000;display:grid;place-items:center;padding:20px;background:rgba(33,24,19,.55)}
+.updbox{width:min(420px,100%);padding:28px;border-radius:16px;background:#fff;text-align:center}
+.updbox h2{margin:0 0 6px;font-size:19px;color:var(--brand-ink)}
+.updbox p{margin:0 0 18px;font-size:14px;color:var(--dim)}
+.updbar{height:10px;border-radius:999px;background:var(--muted);overflow:hidden}
+.updbar i{display:block;height:100%;width:0;border-radius:999px;background:var(--brand);transition:width .8s ease}
+.updbox small{display:block;margin-top:12px;font-size:12px;color:var(--faint)}
 .vb b{color:#5A2C06}
 @media (max-width:640px){.vb{margin:10px 16px 0;flex-wrap:wrap}}
 .topbar .titles{flex:1;min-width:0}
@@ -2724,17 +2732,34 @@ async function openFeedback(kind = "bug", context = "") {
   window.open(url, "_blank", "noopener");
 }
 // while PeakCut updates itself: say what it is doing, and load the page again once the new version answers
+function updShow(doing, pct) {
+  let el = $("#updcard");
+  if (!el) {
+    el = document.createElement("div"); el.id = "updcard"; el.className = "updcard";
+    el.innerHTML = `<div class="updbox" role="status" aria-live="polite"><h2>Updating PeakCut</h2><p></p><div class="updbar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div><small></small></div>`;
+    document.body.appendChild(el);
+  }
+  el.querySelector("p").textContent = doing + "…";
+  el.querySelector("i").style.width = pct + "%";
+  el.querySelector(".updbar").setAttribute("aria-valuenow", pct);
+  el.querySelector("small").textContent = pct + "% · Your videos and settings stay as they are.";
+}
+function updHide() { $("#updcard")?.remove(); clearInterval(S.updTimer); S.updTimer = null; }
 function updWatch() {
   if (S.updTimer) return;
-  let gone = false;
+  let gone = false, pct = 5, doing = "Getting ready";
+  updShow(doing, pct);
   S.updTimer = setInterval(async () => {
     let st;
     try { const r = await fetch("/api/update", {headers: {"Accept": "application/json"}}); if (!r.ok) throw 0; st = await r.json(); }
-    catch { gone = true; return; }
-    if (gone || !st.found) return location.reload();
-    S.status.updater = st; drawShell();
-    if (st.error) { clearInterval(S.updTimer); S.updTimer = null; toast("The update didn't work, so PeakCut stayed on this version. " + st.error, "bad"); }
-  }, 2500);
+    catch { gone = true; pct = Math.min(97, pct + 1); return updShow("Restarting PeakCut", pct); }
+    if (gone) { updShow("Done", 100); clearInterval(S.updTimer); return setTimeout(() => location.reload(), 700); }
+    if (st.error) { updHide(); return toast("The update didn't work, so PeakCut stayed on this version. " + st.error, "bad"); }
+    if (!st.doing) { updHide(); return; }
+    doing = st.doing; pct = Math.max(pct, st.percent || 0);
+    pct = Math.min((st.percent || pct) + 12, pct + 1);          // keeps moving inside a long step, never past the next
+    updShow(doing, pct);
+  }, 1500);
 }
 function updateHow() {
   const up = S.status?.update, d = $("#formdlg"); if (!up || d.open) return;
@@ -2835,8 +2860,12 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   let upSeen = "";
   try { upSeen = localStorage.getItem("peakcut_update_seen") || ""; } catch {}
   const upd = S.status.updater;
-  const upBar = up && upd?.doing ? `<div class="vb" role="status"><span class="spin" style="width:15px;height:15px;border-width:2px"></span><span><b>Updating PeakCut.</b> ${esc(upd.doing)}…</span></div>`
-    : up && up.latest !== upSeen ? `<div class="vb" role="status">${ic("up")}<span>${up.restart ? "<b>The new version is downloaded.</b> Close PeakCut and start it again to use it." : `A new version of PeakCut is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
+  if (upd?.doing) updWatch();
+  const done = S.status.updated;
+  let doneSeen = "";
+  try { doneSeen = localStorage.getItem("peakcut_updated_seen") || ""; } catch {}
+  const upBar = done && done.version !== doneSeen ? `<div class="vb ok" role="status">${ic("check")}<span><b>PeakCut is updated</b> to the latest version (${esc(done.version)}).</span><button class="btn sm primary" data-act="updseen">Got it</button></div>`
+    : up && !upd?.doing && up.latest !== upSeen ? `<div class="vb" role="status">${ic("up")}<span>${up.restart ? "<b>The new version is downloaded.</b> Close PeakCut and start it again to use it." : `A new version of PeakCut is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
     ${upd?.can ? `<button class="btn sm primary" data-act="updnow">Update now</button><button class="btn sm" data-act="updhow">What's new</button>` : `<button class="btn sm primary" data-act="updhow">${up.restart ? "What's new" : "How to update"}</button>`}<button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button></div>` : "";
   const toolBar = S.status.no_ffmpeg ? `<div class="vb" role="alert">${ic("warn")}<span><b>PeakCut can't make clips yet: ffmpeg isn't installed on this computer.</b> Open a terminal, run <code>winget install Gyan.FFmpeg</code> (Mac: <code>brew install ffmpeg</code>, Linux: <code>sudo apt install ffmpeg</code>), then close PeakCut and start it again.</span></div>` : "";
   const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "usage" ? `<div class="vb" role="status">${ic("warn")}<span><b>The AI isn't answering.</b> ${esc(S.status.ai.problem)} PeakCut can't pick clips until this is fixed.</span><button class="btn sm primary" data-act="go" data-v="usage">Open AI</button></div>` : "";
@@ -3475,7 +3504,7 @@ function fromPath(path) {
   const sty = path.match(/^\/app\/styles(?:\/([\w-]{1,40}))?\/?$/);       // the list, a new style, or one being edited
   if (sty) return ["styles", sty[1] || ""];
   if (/^\/app\/(settings\/ai|usage)\/?$/.test(path)) return ["usage"];      // where the key and AI usage used to be
-  const st = path.match(/^\/app\/settings(?:\/(profile|security|apps|speech|storage|updates))?\/?$/);
+  const st = path.match(/^\/app\/settings(?:\/(profile|security|apps|speech|storage|updates|app))?\/?$/);
   if (st) return ["settings", st[1] || null];
   if (/^\/app\/live\/mine\/?$/.test(path)) return ["discover", "mine"];
   const cpm = path.match(/^\/app\/campaigns\/([\w-]{1,40})\/?$/);
@@ -5834,7 +5863,8 @@ const setTabs = () => [
   ["apps", "Connected apps", "plug", "Where your clips get posted"],
   ...(S.status.user?.is_admin ? [["speech", "Speech models", "chat", "The languages PeakCut can hear"],
                                  ["storage", "Storage", "folder", "Where videos and clips are kept"],
-                                 ["updates", "Updates", "up", "Get new versions"]] : [])];
+                                 ["updates", "Updates", "up", "Get new versions"]] : []),
+  ...(S.status.user?.is_admin && S.status.accounts === false ? [["app", "App", "plug", "Open PeakCut from an icon"]] : [])];
 async function drawSettings() {
   const box = $("#sform"); if (!box) return;
   const tab = S.stab || setTabs()[0][0], me = S.status.user;
@@ -5843,6 +5873,13 @@ async function drawSettings() {
     <div class="set-body" id="setbody"><div class="set-load">Loading…</div></div></div>`;
   const body = $("#setbody");
   try {
+    if (tab === "app") {
+      body.innerHTML = `<section class="set-sec"><h2>PeakCut as an app</h2><p class="help">Put a PeakCut icon on your desktop and in the Start menu. Clicking it starts PeakCut and opens it in its own window, so you never have to run a command again.</p>
+        <div class="row" style="margin:14px 0"><img src="/brand/peakcut.ico" alt="" width="40" height="40"><button class="btn primary" data-act="mkicon">${ic("down")}Create the PeakCut icon</button></div>
+        <p class="help">To keep it on the Windows taskbar: open the Start menu, type PeakCut, right-click it and choose <b>Pin to taskbar</b>. If you move the PeakCut folder, create the icon again.</p>
+        <h2 style="margin-top:28px">Close PeakCut</h2><p class="help">Opened from the icon, PeakCut runs quietly in the background. Close it here.</p>
+        <div class="row" style="margin-top:12px"><button class="btn" data-act="quitapp">Close PeakCut</button></div></section>`;
+    }
     if (tab === "updates") {
       const u = await api("/api/update");
       body.innerHTML = `<section class="set-sec"><h2>Updates</h2><p class="help">PeakCut looks for a new version on GitHub every minute. Updating keeps your settings, keys, videos and clips.</p>
@@ -6190,7 +6227,11 @@ document.addEventListener("change", async e => {
     syncCaptionStyle(t);
   }
   if (t.id === "upd_auto") {
-    try { await send("/api/update/auto", {on: t.checked}, "PUT"); toast(t.checked ? "PeakCut will update by itself." : "Automatic updates are off.", "ok"); }
+    try {
+      const st = await send("/api/update/auto", {on: t.checked}, "PUT");
+      toast(t.checked ? "PeakCut will update by itself." : "Automatic updates are off.", "ok");
+      if (t.checked && (await api("/api/update")).found && st.can) updWatch();      // one is waiting: it starts now
+    }
     catch (err) { t.checked = !t.checked; toast(err.message, "bad"); }
     return;
   }
@@ -6560,6 +6601,19 @@ document.addEventListener("click", async e => {
       await send(`/api/jobs/${D.jid}/clips/${D.cid}/render`, {template: v}); toast("Making it again in this style. Posts wait for the new version.", "ok"); await tick(); return drawClipDlg(true); }
     if (a === "settab") { e.preventDefault(); if (S.tplEdit?.dirty && !await ask("Leave without saving?", "Your changes to this style are lost.", "Leave", true)) return;
       S.tplEdit = null; S.stab = d.k; remember("settings", d.k); return drawSettings(); }
+    if (a === "updseen") { try { localStorage.setItem("peakcut_updated_seen", S.status.updated?.version || ""); } catch {} return drawShell(); }
+    if (a === "mkicon") {
+      b.disabled = true;
+      try { const r = await send("/api/app/shortcut", {}); toast("The PeakCut icon is made: " + r.made[0], "ok"); }
+      finally { b.disabled = false; }
+      return;
+    }
+    if (a === "quitapp") {
+      if (!await ask("Close PeakCut?", "It stops running until you open it again from its icon. Scheduled posts and auto-recording wait until then.", "Close PeakCut", true)) return;
+      await send("/api/app/quit", {});
+      document.body.innerHTML = `<div class="updcard"><div class="updbox"><h2>PeakCut is closed</h2><p>Click the PeakCut icon to open it again. You can close this window.</p></div></div>`;
+      return;
+    }
     if (a === "updhow") return updateHow();
     if (a === "updnow") {
       if ($("#formdlg").open) $("#formdlg").close();

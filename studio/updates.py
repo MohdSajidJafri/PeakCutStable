@@ -151,6 +151,47 @@ def auto_on() -> bool:
 
 def set_auto(on: bool):
     _settings_file().write_text(json.dumps({"auto": bool(on)}), encoding="utf-8")
+    if on:
+        threading.Thread(target=_act_now, daemon=True).start()      # an update already waiting is installed now
+
+
+def _act_now():
+    try:
+        found = check(force=True)
+        if found and not _inst["doing"] and can_install()[0]:
+            install()
+    except Exception:  # noqa: BLE001 - the once-a-minute check tries again
+        pass
+
+
+# ---- "PeakCut was updated": the version that last ran is remembered, so a new one is noticed however it got here
+_updated = {}
+
+
+def note_version(used_before: bool):
+    """Called once at start. `used_before`: this copy already has someone's work, so no record means it was updated
+    from a version that kept none."""
+    if not RUNNING:
+        return
+    f = config.DATA_DIR / "version.json"
+    try:
+        had = json.loads(f.read_text(encoding="utf-8"))
+        had = had if isinstance(had, dict) else {}
+    except (OSError, ValueError):
+        had = {}
+    if had.get("version") != RUNNING:
+        had = {"version": RUNNING, "updated": time.time() if had.get("version") or used_before else 0}
+        try:
+            f.write_text(json.dumps(had), encoding="utf-8")
+        except OSError:
+            pass
+    _updated.clear()
+    if had.get("updated") and time.time() - had["updated"] < 7 * 86400:
+        _updated.update(version=RUNNING[:7], at=had["updated"])
+
+
+def updated():
+    return dict(_updated) or None
 
 
 def _git(*args, timeout=300) -> str:
@@ -179,9 +220,13 @@ def can_install():
     return True, ""
 
 
+STEPS = (("Getting ready", 8), ("Waiting", 12), ("Downloading", 30), ("Installing", 55), ("Checking", 75), ("Restarting", 90))
+
+
 def state() -> dict:
     ok, why = can_install()
     return {"can": ok, "why": why, "auto": auto_on(), "doing": _inst["doing"], "error": _inst["error"],
+            "percent": next((n for start, n in STEPS if _inst["doing"].startswith(start)), 0),
             "version": (RUNNING or "")[:7]}
 
 
